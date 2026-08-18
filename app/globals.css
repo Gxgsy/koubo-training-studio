@@ -1624,3 +1624,115 @@ body {
   color: rgba(255, 255, 255, 0.85);
   background: rgba(255, 255, 255, 0.08);
 }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .brand-block,
+  .rail-section,
+  .studio-header,
+  .script-panel,
+  .practice-panel,
+  .report-card,
+  .feedback-card,
+  .top-mode-bar,
+  .modal-panel,
+  .category-block,
+  .manage-course-card,
+  .ai-report-section,
+  .part-editor,
+  .example-view,
+  .lesson-guide,
+  .free-prompt,
+  .empty-paste-hint,
+  .empty-note,
+  .course-card,
+  .transcript-view,
+  .suggestion {
+    background: #141821;
+  }
+
+  .course-card,
+  .transcript-view,
+  .part-editor,
+  .example-view,
+  .free-prompt,
+  .empty-paste-hint,
+  .empty-note {
+    background: #161b24;
+  }
+
+  .script-panel textarea,
+  .paste-box,
+  .part-editor textarea,
+  .add-form input,
+  .add-form select,
+  .add-form textarea {
+    background: #1b212b;
+  }
+
+  .course-card.active,
+  .lesson-row.active {
+    background: #1d2a44;
+  }
+
+  .modal-backdrop {
+    background: rgba(0, 0, 0, 0.72);
+  }
+}
+
+.mode-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.mode-tabs button {
+  min-width: 132px;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 16px;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mode-tabs button.selected {
+  color: white;
+  background: var(--blue);
+}
+
+.studio-header .api-settings-button {
+  min-width: 96px;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: white;
+  background: var(--blue);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.encouragement {
+  margin-top: 10px;
+  color: #b9f0cd;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.encouragement.retry {
+  color: #ffd88a;
+}
+
+.encouragement.report-tip {
+  color: #c6d8ff;
+}
+
+.score-strip {
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+}

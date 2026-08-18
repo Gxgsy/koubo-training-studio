@@ -471,6 +471,42 @@ export default function Home() {
     }
   }
 
+  function saveLessonScore(currentMode: PracticeMode, score: number) {
+    if (!activeLesson) return;
+    setCategories((prev) =>
+      prev.map((category) => {
+        if (category.id !== activeCategoryId) return category;
+        return {
+          ...category,
+          lessons: category.lessons.map((lesson) => {
+            if (lesson.id !== activeLessonId) return lesson;
+            const readScore =
+              currentMode === "read"
+                ? Math.max(lesson.readScore ?? 0, score)
+                : lesson.readScore;
+            const freeScore =
+              currentMode === "free"
+                ? Math.max(lesson.freeScore ?? 0, score)
+                : lesson.freeScore;
+            const completed = (readScore ?? 0) >= 70 && (freeScore ?? 0) >= 70;
+            return {
+              ...lesson,
+              readScore,
+              freeScore,
+              status: completed ? ("已完成" as const) : ("进行中" as const),
+            };
+          }),
+        };
+      }),
+    );
+  }
+
+  function switchMode(nextMode: PracticeMode) {
+    if (nextMode === mode) return;
+    setMode(nextMode);
+    resetPracticeView();
+  }
+
   function openNewCourseForm() {
     setDraftCategoryId("");
     setDraft({ title: "", goal: "", template: "", question: "", exampleText: "" });
@@ -737,7 +773,15 @@ export default function Home() {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
     } catch (error) {
       const err = error as { name?: string; message?: string };
       setErrorMessage(
@@ -997,7 +1041,74 @@ export default function Home() {
     }
     setErrorMessage("");
     setHasReport(true);
-    void generateAiReport(text);
+    const localStructureChecks = evaluateStructure(text, activeLesson ?? { exampleParts: [] });
+    const localCompleteness = localStructureChecks.length
+      ? Math.round(
+          localStructureChecks.reduce((sum, check) => sum + check.score, 0) /
+            localStructureChecks.length,
+        )
+      : 0;
+    const localCharCount = text.replace(/\s/g, "").length;
+    const localFillerTotal = fillerWords.reduce(
+      (sum, word) => sum + (text.match(new RegExp(word, "g")) || []).length,
+      0,
+    );
+    const localFillerDensity = localCharCount
+      ? Math.round((localFillerTotal / localCharCount) * 1000) / 10
+      : 0;
+    const localFluency = Math.max(0, Math.min(100, 100 - localFillerDensity * 8));
+    const localPace =
+      elapsedRef.current > 0
+        ? Math.round((localCharCount / elapsedRef.current) * 60)
+        : 0;
+    const localVolScore =
+      average === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              100,
+              average >= 18 && average <= 85
+                ? 100 - Math.abs(average - 48) * 0.8
+                : 45,
+            ),
+          );
+    const localPaceScore =
+      localPace === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              100,
+              localPace >= 90 && localPace <= 220
+                ? 100 - Math.abs(localPace - 150) * 0.4
+                : 50,
+            ),
+          );
+    const localExpression = Math.round(
+      localVolScore * 0.5 + localPaceScore * 0.3 + stability * 0.2,
+    );
+    const localPaceVolume = Math.round(localPaceScore * 0.6 + localVolScore * 0.4);
+    const localRawScores = [
+      localCompleteness,
+      localFluency,
+      localExpression,
+      localPaceVolume,
+    ];
+    const localAverage = localRawScores.reduce((sum, value) => sum + value, 0) / 4;
+    const localBalanced = localRawScores.map((value) =>
+      Math.round(value * 0.65 + localAverage * 0.35),
+    );
+    const localScore = Math.round(
+      localBalanced[0] * 0.35 +
+        localBalanced[1] * 0.2 +
+        localBalanced[2] * 0.2 +
+        localBalanced[3] * 0.25,
+    );
+    saveLessonScore(mode, localScore);
+    if (mode === "free") {
+      void generateAiReport(text);
+    }
   }
 
   function finishPractice() {
@@ -1006,19 +1117,6 @@ export default function Home() {
 
   return (
     <main className="product">
-      <div className="top-mode-bar" aria-label="训练模式">
-        <div className="top-mode-switch">
-          <button className={mode === "read" ? "selected" : ""} onClick={() => setMode("read")} type="button">
-            话术跟练
-          </button>
-          <button className={mode === "free" ? "selected" : ""} onClick={() => setMode("free")} type="button">
-            脱稿演练
-          </button>
-        </div>
-        <button type="button" className="api-settings-button" onClick={() => setIsSettingsOpen(true)}>
-          {apiConfig.apiKey ? apiConfig.provider : "模型设置"}
-        </button>
-      </div>
       <aside className="course-rail">
         <div className="brand-block">
           <div className="brand-icon">口</div>
@@ -1084,7 +1182,19 @@ export default function Home() {
             <h2>{activeLesson?.goal ?? ""}</h2>
             <p>{activeLesson?.template ?? ""}</p>
           </div>
+          <button type="button" className="api-settings-button" onClick={() => setIsSettingsOpen(true)}>
+            {apiConfig.apiKey ? apiConfig.provider : "模型设置"}
+          </button>
         </header>
+
+        <div className="mode-tabs" aria-label="训练模式">
+          <button className={mode === "read" ? "selected" : ""} onClick={() => switchMode("read")} type="button">
+            话术跟练
+          </button>
+          <button className={mode === "free" ? "selected" : ""} onClick={() => switchMode("free")} type="button">
+            脱稿演练
+          </button>
+        </div>
 
         <div className="workspace-grid">
           <section className="script-panel">
@@ -1237,16 +1347,34 @@ export default function Home() {
                 : "完成一次训练后生成报告"}
             </h3>
             <p>{aiReport?.summary || reportSummary}</p>
-            {hasReport && !apiConfig.apiKey && (
+            {hasReport && mode === "read" && metrics.score > 60 && (
+              <p className="encouragement">不错，已经超过 60 分，进入脱稿训练再巩固一遍。</p>
+            )}
+            {hasReport && metrics.score <= 60 && (
+              <p className="encouragement retry">再来一次会更好。</p>
+            )}
+            {hasReport && mode === "free" && (activeLesson?.readScore ?? 0) < 70 && (
+              <p className="encouragement retry">跟读还未达到 70 分，先回去练跟读。</p>
+            )}
+            {hasReport && mode === "read" && (
+              <p className="encouragement report-tip">完成脱稿训练才有报告哟～</p>
+            )}
+            {hasReport && mode === "free" && !apiConfig.apiKey && (
               <p className="report-hint">配置模型后会自动生成完整 AI 报告</p>
             )}
-            {hasReport && apiConfig.apiKey && !isGeneratingReport && (
+            {hasReport && mode === "free" && apiConfig.apiKey && !isGeneratingReport && (
               <button type="button" className="regenerate-report" onClick={regenerateAiReport}>
                 重新生成 AI 报告
               </button>
+              )}
+            {hasReport && mode === "read" && metrics.score > 60 && (
+              <button type="button" className="next-lesson" onClick={() => switchMode("free")}>
+                进入脱稿训练
+              </button>
             )}
             {hasReport &&
-              (aiReport?.score ?? metrics.completeness) >= 70 &&
+              (activeLesson?.readScore ?? 0) >= 70 &&
+              (activeLesson?.freeScore ?? 0) >= 70 &&
               activeLessonIndex < (activeCourse?.lessons.length ?? 0) - 1 && (
                 <button type="button" className="next-lesson" onClick={completeActiveLesson}>
                   进入下一课
@@ -1254,22 +1382,16 @@ export default function Home() {
               )}
           </div>
           <div className="score-strip">
-            <Score label="完整度" value={hasReport ? metrics.completeness : undefined} />
+            {(activeLesson?.exampleParts ?? []).map((part, index) => (
+              <Score
+                key={part.label}
+                label={part.label}
+                value={hasReport ? structureChecks[index]?.score : undefined}
+              />
+            ))}
             <Score label="流畅度" value={hasReport ? metrics.fluency : undefined} />
-            <Score label="表达状态" value={hasReport ? metrics.expression : undefined} />
             <Score label="语速音量" value={hasReport ? metrics.paceVolume : undefined} />
           </div>
-          {hasReport && (
-            <div className="structure-values">
-              {structureChecks.map((check) => (
-                <div key={check.label} className={`structure-value ${check.status}`}>
-                  <span>{check.label}</span>
-                  <strong>{check.score}分</strong>
-                  <i>{check.status}</i>
-                </div>
-              ))}
-            </div>
-          )}
         </section>
         {hasReport && isGeneratingReport && (
           <div className="browser-warning">AI 报告生成中…</div>

@@ -13,6 +13,8 @@ export type Lesson = {
   question: string;
   exampleParts: ExamplePart[];
   status: LessonStatus;
+  readScore?: number;
+  freeScore?: number;
 };
 
 export type Course = {
