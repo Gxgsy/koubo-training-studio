@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { defaultCategories, type Course } from "./course-data";
 
 type SpeechRecognitionAlternative = {
   transcript: string;
@@ -48,9 +49,13 @@ function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null 
   return api.SpeechRecognition ?? api.webkitSpeechRecognition ?? null;
 }
 
+function normalizeForCompare(value: string): string {
+  return value.replace(/[\s，。！？、；：""''（）【】《》,.!?;:'"()[\]]/g, "");
+}
+
 function coverageRatio(target: string, source: string): number {
-  const t = target.replace(/[\s，。！？、；：""''（）【】《》,.!?;:'"()[\]]/g, "");
-  const s = source.replace(/[\s，。！？、；：""''（）【】《》,.!?;:'"()[\]]/g, "");
+  const t = normalizeForCompare(target);
+  const s = normalizeForCompare(source);
   if (!t) return 0;
   let matched = 0;
   let index = 0;
@@ -64,84 +69,183 @@ function coverageRatio(target: string, source: string): number {
   return matched / t.length;
 }
 
-type Course = {
-  id: string;
-  title: string;
-  status: "进行中" | "已结束";
-  progress: number;
-  currentDay: string;
-  goal: string;
-  template: string;
-  question: string;
-  exampleParts: { label: string; text: string }[];
+type StructureCheck = {
+  label: string;
+  score: number;
+  status: "完整" | "待加强" | "缺失";
 };
+
+const structureSignals: Record<string, { strong: string[]; weak: string[] }> = {
+  结论: { strong: ["我觉得", "我认为", "我的答案是", "我推荐", "最值", "答案是", "应该"], weak: ["是", "最", "比", "更"] },
+  原因: { strong: ["因为", "为了", "由于", "之所以"], weak: ["原因", "不", "都", "每天"] },
+  细节: { strong: ["以前", "现在", "的时候", "比如", "有一次", "每天", "当时"], weak: ["我", "他", "她", "东西", "手机"] },
+  感受: { strong: ["我觉得", "我感觉", "感受", "开心", "烦", "值", "喜欢", "感谢", "理解", "心情"], weak: ["很", "挺", "有点"] },
+  误区: { strong: ["误区", "很多人", "总以为", "刚开始", "一开始", "以为"], weak: ["错误", "错", "问题"] },
+  纠偏: { strong: ["其实", "应该", "正确", "不是", "真正", "先"], weak: ["但", "要", "会"] },
+  例子: { strong: ["比如", "例如", "有一次", "举个例子", "以前"], weak: ["我", "他", "她", "一个", "每天"] },
+  行动任务: { strong: ["今天", "下一步", "先", "每天", "试试", "可以", "任务"], weak: ["去", "做", "录"] },
+  场景: { strong: ["那天", "前几天", "有一次", "晚上", "早上", "家", "楼下", "的时候"], weak: ["我", "她", "他", "看到"] },
+  普遍问题: { strong: ["其实", "我们", "很多人", "很少", "问题", "背后"], weak: ["都", "会", "总"] },
+  判断: { strong: ["所以", "我觉得", "我认为", "现在", "愿意"], weak: ["我", "是"] },
+  收尾: { strong: ["最后", "所以", "这件事", "反而", "让我", "新的"], weak: ["了", "吗"] },
+};
+
+function evaluateStructure(
+  text: string,
+  lesson: { exampleParts: { label: string; text: string }[] },
+): StructureCheck[] {
+  const normalized = normalizeForCompare(text);
+  return lesson.exampleParts.map((part) => {
+    const signals = structureSignals[part.label] ?? { strong: [], weak: [] };
+    const strongHits = signals.strong.filter((word) => normalized.includes(word)).length;
+    const weakHits = signals.weak.filter((word) => normalized.includes(word)).length;
+    const score =
+      strongHits === 0 && weakHits === 0
+        ? 0
+        : strongHits >= 1
+          ? Math.min(100, 70 + (strongHits - 1) * 15 + weakHits * 5)
+          : Math.min(60, 40 + weakHits * 8);
+    const status: StructureCheck["status"] = score >= 70 ? "完整" : score >= 40 ? "待加强" : "缺失";
+    return { label: part.label, score, status };
+  });
+}
 
 type PracticeMode = "read" | "free";
 
 const fillerWords = ["然后", "就是", "嗯", "啊", "那个", "所以", "呃"];
 
-const courses: Course[] = [
+const builtInCategoryIds = new Set(["default", "creator", "emotion"]);
+
+type ApiConfig = {
+  provider: string;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+};
+
+type AiReport = {
+  score?: number;
+  summary?: string;
+  strengths?: string[];
+  sentence_fixes?: { original: string; rewritten: string; reason: string }[];
+  high_frequency_words?: { word: string; count?: number; suggestion?: string }[];
+  key_issues?: string[];
+  optimization_direction?: string;
+  next_step?: string;
+};
+
+const providerPresets: { id: string; name: string; baseUrl: string; model: string }[] = [
+  { id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+  { id: "kimi", name: "Kimi", baseUrl: "https://api.moonshot.cn", model: "moonshot-v1-8k" },
   {
-    id: "default",
-    title: "14 天口播表达系统",
-    status: "进行中",
-    progress: 7,
-    currentDay: "Day 1",
-    goal: "先把一段话说完整",
-    template: "结论 + 原因 + 细节 + 感受",
-    question: "最近买过最值的东西是什么？",
-    exampleParts: [
-      { label: "结论", text: "我最近买过最值的东西，是一个十几块钱的手机支架。" },
-      { label: "原因", text: "它不贵，但我几乎每天都用。" },
-      {
-        label: "细节",
-        text: "以前吃饭、化妆、回消息的时候，我总要找杯子或者纸巾盒把手机垫起来，角度不稳，还经常滑下来。现在支架往桌上一放，手机立住了，手也空出来了。",
-      },
-      {
-        label: "感受",
-        text: "这个东西没什么技术含量，但它确实让我每天少烦一点，所以我觉得很值。",
-      },
-    ],
+    id: "doubao",
+    name: "豆包",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    model: "doubao-pro-32k",
   },
-  {
-    id: "creator",
-    title: "自媒体起号口播专项",
-    status: "进行中",
-    progress: 28,
-    currentDay: "专项训练",
-    goal: "把选题讲得具体、可执行",
-    template: "误区 + 纠偏 + 例子 + 行动任务",
-    question: "新人起号最容易踩的坑是什么？",
-    exampleParts: [
-      { label: "误区", text: "很多人一开始练口播，总想把稿子写得特别漂亮。" },
-      { label: "纠偏", text: "其实新手最应该先练的是把一个简单问题说满三十秒。" },
-      { label: "例子", text: "你先有结论，再补一个具体场景，最后说自己的感受。" },
-      { label: "行动任务", text: "今天只录一遍，不追求完美，先让整段话完整。" },
-    ],
-  },
-  {
-    id: "emotion",
-    title: "情绪类长口播训练",
-    status: "进行中",
-    progress: 15,
-    currentDay: "情绪表达",
-    goal: "从生活细节自然讲到观点",
-    template: "场景 + 感受 + 普遍问题 + 判断 + 收尾",
-    question: "你有没有一件小事，让你突然理解了某个人？",
-    exampleParts: [
-      { label: "场景", text: "前几天我回家很晚，看到楼下便利店还亮着灯。" },
-      { label: "感受", text: "那一刻我突然觉得，做这份工作的人，可能已经很多年没有按时吃过晚饭。" },
-      { label: "普遍问题", text: "我们平时很少会去想，那些看起来平常的服务，背后是谁在替你撑着。" },
-      { label: "判断", text: "所以现在我愿意多说一句谢谢，也多一点耐心。" },
-      { label: "收尾", text: "一件小事，反而让我对人和人之间的关系有了新的理解。" },
-    ],
-  },
+  { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com", model: "gpt-4o-mini" },
+  { id: "custom", name: "自定义", baseUrl: "", model: "" },
 ];
 
+function readStoredApiConfig(): ApiConfig {
+  if (typeof window === "undefined") {
+    return { provider: "deepseek", apiKey: "", model: "deepseek-chat", baseUrl: "https://api.deepseek.com" };
+  }
+  try {
+    const raw = window.localStorage.getItem("koubo-api-config-v1");
+    if (raw) {
+      const parsed = JSON.parse(raw) as ApiConfig;
+      if (parsed && typeof parsed.baseUrl === "string") return parsed;
+    }
+  } catch { /* ignore */ }
+  return { provider: "deepseek", apiKey: "", model: "deepseek-chat", baseUrl: "https://api.deepseek.com" };
+}
+
+function splitScriptByStructure(
+  text: string,
+  labels: string[],
+): { label: string; text: string }[] {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const sentences = clean.match(/[^。！？]+[。！？]|[^。！？]+$/g) ?? [];
+  const parts = labels.map((label) => ({ label, text: "" }));
+  if (!sentences.length) return parts;
+  if (parts.length <= 1) {
+    parts[0].text = clean;
+    return parts;
+  }
+  if (sentences.length <= parts.length) {
+    sentences.forEach((sentence, index) => {
+      parts[Math.min(index, parts.length - 1)].text += sentence;
+    });
+    return parts;
+  }
+  const keywordRules: Record<string, string[]> = {
+    结论: ["我觉得", "我认为", "答案是", "推荐", "最值", "应该", "想"],
+    原因: ["因为", "为了", "由于", "之所以", "不贵", "方便"],
+    细节: ["以前", "现在", "比如", "有一次", "的时候", "后来", "每天", "每次"],
+    感受: ["我觉得", "感觉", "开心", "烦", "值", "希望", "理解", "谢谢"],
+    误区: ["误区", "很多人", "总以为", "一开始", "刚开始", "以为"],
+    纠偏: ["其实", "应该", "正确", "不是", "真正", "先"],
+    例子: ["比如", "例如", "有一次", "举个例子", "以前", "如果"],
+    行动任务: ["今天", "下一步", "先", "每天", "试试", "可以", "任务"],
+    场景: ["那天", "前几天", "有一次", "晚上", "早上", "家", "楼下", "的时候"],
+    普遍问题: ["其实", "我们", "很多人", "很少", "问题", "背后"],
+    判断: ["所以", "我觉得", "我认为", "现在", "愿意"],
+    收尾: ["最后", "所以", "这件事", "反而", "让我", "新的"],
+  };
+  parts[0].text = sentences[0];
+  parts[parts.length - 1].text = sentences[sentences.length - 1];
+  const assigned = new Set([0, sentences.length - 1]);
+  const middleSentences = sentences.filter((_, index) => !assigned.has(index));
+  const middleLabels = labels.slice(1, -1);
+  if (middleLabels.length) {
+    const buckets = middleLabels.map(() => [] as string[]);
+    for (const sentence of middleSentences) {
+      let placed = false;
+      for (let index = 0; index < middleLabels.length; index += 1) {
+        const rules = keywordRules[middleLabels[index]] ?? [];
+        if (rules.some((rule) => sentence.includes(rule))) {
+          buckets[index].push(sentence);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        const minIndex = buckets.reduce(
+          (min, bucket, index) => (bucket.length < buckets[min].length ? index : min),
+          0,
+        );
+        buckets[minIndex].push(sentence);
+      }
+    }
+    middleLabels.forEach((label, index) => {
+      parts[index + 1].text = buckets[index].join("");
+    });
+  }
+  return parts;
+}
+
+function readStoredCategories(): Course[] {
+  if (typeof window === "undefined") return defaultCategories;
+  try {
+    const raw = window.localStorage.getItem("koubo-courses-v1");
+    if (raw) {
+      const parsed = JSON.parse(raw) as Course[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return defaultCategories;
+}
+
 export default function Home() {
-  const [activeCourse, setActiveCourse] = useState(courses[0]);
+  const [categories, setCategories] = useState<Course[]>(readStoredCategories);
+  const [activeCategoryId, setActiveCategoryId] = useState(defaultCategories[0].id);
+  const [activeLessonId, setActiveLessonId] = useState(defaultCategories[0].lessons[0].id);
   const [mode, setMode] = useState<PracticeMode>("read");
   const [script, setScript] = useState("");
+  const [scriptParts, setScriptParts] = useState<{ label: string; text: string }[]>([]);
+  const [pasteText, setPasteText] = useState("");
+  const [scriptTab, setScriptTab] = useState<"example" | "mine">("example");
   const [transcript, setTranscript] = useState("");
   const [interimText, setInterimText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
@@ -157,6 +261,50 @@ export default function Home() {
     averageVolume: number;
     stability: number;
   } | null>(null);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isAdding, setIsAdding] = useState(false);
+  const [draftCategoryId, setDraftCategoryId] = useState(defaultCategories[0].id);
+  const [draft, setDraft] = useState({
+    title: "",
+    goal: "",
+    template: "",
+    question: "",
+    exampleText: "",
+  });
+  const [isNewCourse, setIsNewCourse] = useState(false);
+  const [newCourseName, setNewCourseName] = useState("");
+  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
+  const [apiConfig, setApiConfig] = useState<ApiConfig>(readStoredApiConfig);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [aiReport, setAiReport] = useState<AiReport | null>(null);
+  const [testStatus, setTestStatus] = useState<{
+    state: "idle" | "testing" | "ok" | "fail";
+    message: string;
+  }>({ state: "idle", message: "" });
+
+  const activeCourse =
+    categories.find((category) => category.id === activeCategoryId) ?? categories[0];
+  const activeLesson =
+    activeCourse?.lessons.find((lesson) => lesson.id === activeLessonId) ??
+    activeCourse?.lessons[0];
+  const activeLessonIndex = activeCourse?.lessons.findIndex(
+    (lesson) => lesson.id === activeLesson?.id,
+  ) ?? -1;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem("koubo-courses-v1", JSON.stringify(categories));
+    } catch { /* ignore */ }
+  }, [categories]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem("koubo-api-config-v1", JSON.stringify(apiConfig));
+    } catch { /* ignore */ }
+  }, [apiConfig]);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -204,6 +352,242 @@ export default function Home() {
       window.cancelAnimationFrame(volumeRafRef.current);
       volumeRafRef.current = null;
     }
+  }
+
+  function resetPracticeView() {
+    setScript("");
+    setScriptParts([]);
+    setPasteText("");
+    setTranscript("");
+    setInterimText("");
+    setHasReport(false);
+    setAudioMetrics(null);
+    setAiReport(null);
+    setIsGeneratingReport(false);
+    setErrorMessage("");
+  }
+
+  function handlePasteScript(text: string) {
+    const labels = activeLesson?.exampleParts.map((part) => part.label) ?? [];
+    const parts = splitScriptByStructure(text, labels);
+    setScriptParts(parts);
+    setScript(parts.map((part) => part.text).join(""));
+    setPasteText("");
+  }
+
+  function updateScriptPart(index: number, text: string) {
+    const parts = scriptParts.map((part, partIndex) =>
+      partIndex === index ? { ...part, text } : part,
+    );
+    setScriptParts(parts);
+    setScript(parts.map((part) => part.text).join(""));
+  }
+
+  function handleProviderChange(provider: string) {
+    const preset = providerPresets.find((item) => item.id === provider);
+    setApiConfig((prev) => ({
+      ...prev,
+      provider,
+      model: preset?.model ?? prev.model,
+      baseUrl: preset?.baseUrl ?? prev.baseUrl,
+    }));
+    setTestStatus({ state: "idle", message: "" });
+  }
+
+  async function testApiConnection() {
+    if (!apiConfig.apiKey.trim() || !apiConfig.model.trim() || !apiConfig.baseUrl.trim()) {
+      setTestStatus({ state: "fail", message: "请先填写 API Key、模型名称和 Base URL" });
+      return;
+    }
+    setTestStatus({ state: "testing", message: "正在测试连接…" });
+    try {
+      const response = await fetch("/api/test-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(apiConfig),
+      });
+      const data = (await response.json()) as { ok?: boolean; message?: string };
+      setTestStatus({
+        state: data.ok ? "ok" : "fail",
+        message: data.message ?? "连接失败",
+      });
+    } catch {
+      setTestStatus({ state: "fail", message: "无法连接，请检查网络" });
+    }
+  }
+
+  function toggleCategory(categoryId: string) {
+    setCategories((prev) =>
+      prev.map((category) =>
+        category.id === categoryId
+          ? { ...category, expanded: !category.expanded }
+          : category,
+      ),
+    );
+  }
+
+  function selectLesson(categoryId: string, lessonId: string) {
+    setActiveCategoryId(categoryId);
+    setActiveLessonId(lessonId);
+    resetPracticeView();
+    setCategories((prev) =>
+      prev.map((category) => {
+        if (category.id !== categoryId) return category;
+        return {
+          ...category,
+          lessons: category.lessons.map((lesson) =>
+            lesson.id === lessonId && lesson.status === "未开始"
+              ? { ...lesson, status: "进行中" as const }
+              : lesson,
+          ),
+        };
+      }),
+    );
+  }
+
+  function completeActiveLesson() {
+    if (!activeCourse || !activeLesson || activeLessonIndex < 0) return;
+    const nextLesson = activeCourse.lessons[activeLessonIndex + 1];
+    setCategories((prev) =>
+      prev.map((category) => {
+        if (category.id !== activeCourse.id) return category;
+        return {
+          ...category,
+          lessons: category.lessons.map((lesson, index) => {
+            if (index === activeLessonIndex) {
+              return { ...lesson, status: "已完成" as const };
+            }
+            if (nextLesson && lesson.id === nextLesson.id) {
+              return { ...lesson, status: "进行中" as const };
+            }
+            return lesson;
+          }),
+        };
+      }),
+    );
+    if (nextLesson) {
+      setActiveLessonId(nextLesson.id);
+      resetPracticeView();
+    }
+  }
+
+  function openNewCourseForm() {
+    setDraftCategoryId("");
+    setDraft({ title: "", goal: "", template: "", question: "", exampleText: "" });
+    setNewCourseName("");
+    setIsNewCourse(true);
+    setIsAdding(true);
+    setErrorMessage("");
+  }
+
+  function openEditCourse(categoryId: string) {
+    const category = categories.find((item) => item.id === categoryId);
+    setEditingCourseId(categoryId);
+    setNewCourseName(category?.title ?? "");
+    setErrorMessage("");
+  }
+
+  function saveCourseRename() {
+    if (!editingCourseId || !newCourseName.trim()) {
+      setErrorMessage("请填写课程名称。");
+      return;
+    }
+    setCategories((prev) =>
+      prev.map((category) =>
+        category.id === editingCourseId
+          ? { ...category, title: newCourseName.trim() }
+          : category,
+      ),
+    );
+    setEditingCourseId(null);
+    setNewCourseName("");
+    setErrorMessage("");
+  }
+
+  function deleteCustomCourse(categoryId: string) {
+    const remaining = categories.filter((category) => category.id !== categoryId);
+    setCategories(remaining);
+    if (activeCategoryId === categoryId) {
+      const nextCategory = remaining[0];
+      if (nextCategory) {
+        setActiveCategoryId(nextCategory.id);
+        setActiveLessonId(nextCategory.lessons[0]?.id ?? "");
+        resetPracticeView();
+      }
+    }
+    if (draftCategoryId === categoryId) {
+      setDraftCategoryId(remaining[0]?.id ?? "");
+    }
+  }
+
+  function saveLesson() {
+    if (
+      (isNewCourse && !newCourseName.trim()) ||
+      !draft.title.trim() ||
+      !draft.goal.trim() ||
+      !draft.template.trim() ||
+      !draft.question.trim()
+    ) {
+      setErrorMessage(
+        isNewCourse
+          ? "请把课程分类名称、课程标题、学习目标、核心结构和题目填写完整。"
+          : "请把课程标题、学习目标、核心结构和题目填写完整。",
+      );
+      return;
+    }
+    const exampleParts: { label: string; text: string }[] = draft.exampleText
+      .split("\n")
+      .map((line) => {
+        const colonIndex = line.indexOf("：");
+        const asciiColon = line.indexOf(":");
+        const index = colonIndex >= 0 ? colonIndex : asciiColon;
+        if (index <= 0) return null;
+        return {
+          label: line.slice(0, index).trim(),
+          text: line.slice(index + 1).trim(),
+        };
+      })
+      .filter((part): part is { label: string; text: string } =>
+        Boolean(part && part.text),
+      );
+    if (exampleParts.length === 0 && draft.exampleText.trim()) {
+      exampleParts.push({ label: "示例", text: draft.exampleText.trim() });
+    }
+    const id = `lesson-${Date.now()}`;
+    const lesson = {
+      id,
+      title: draft.title.trim(),
+      goal: draft.goal.trim(),
+      template: draft.template.trim(),
+      question: draft.question.trim(),
+      exampleParts,
+      status: "未开始" as const,
+    };
+    if (isNewCourse) {
+      const categoryId = `custom-${Date.now()}`;
+      setCategories((prev) => [
+        ...prev,
+        {
+          id: categoryId,
+          title: newCourseName.trim(),
+          expanded: true,
+          lessons: [lesson],
+        },
+      ]);
+      setDraftCategoryId(categoryId);
+    } else {
+      setCategories((prev) =>
+        prev.map((category) =>
+          category.id === draftCategoryId
+            ? { ...category, lessons: [...category.lessons, lesson] }
+            : category,
+        ),
+      );
+    }
+    setIsAdding(false);
+    setIsNewCourse(false);
+    setNewCourseName("");
+    setErrorMessage("");
   }
 
   useEffect(() => {
@@ -257,19 +641,20 @@ export default function Home() {
       : Math.min(100, Math.round((charCount / scriptCount) * 100));
   const pace = elapsedSeconds > 0 ? Math.round((charCount / elapsedSeconds) * 60) : 0;
   const averageVolume = audioMetrics?.averageVolume ?? currentVolume;
+  const structureChecks = useMemo(
+    () => evaluateStructure(liveText, activeLesson ?? { exampleParts: [] }),
+    [liveText, activeLesson],
+  );
+  const structureCompleteness = structureChecks.length
+    ? Math.round(structureChecks.reduce((sum, check) => sum + check.score, 0) / structureChecks.length)
+    : 0;
+  const structureIssues = structureChecks.filter((check) => check.status !== "完整");
 
   const metrics = useMemo(() => {
-    const completeness = Math.max(0, Math.min(100, progress));
-    const accuracy =
-      mode === "read"
-        ? Math.max(0, Math.min(100, completeness - fillerDensity * 2))
-        : Math.max(
-            0,
-            Math.min(
-              100,
-              100 - (Math.abs(charCount - scriptCount) / scriptCount) * 40 - fillerDensity * 2,
-            ),
-          );
+    const completeness = Math.max(
+      0,
+      Math.min(100, hasReport ? structureCompleteness : progress),
+    );
     const fluency = Math.max(0, Math.min(100, 100 - fillerDensity * 8));
     const volScore =
       averageVolume === 0
@@ -296,46 +681,43 @@ export default function Home() {
     const stability = audioMetrics?.stability ?? 100;
     const expression = Math.round(volScore * 0.5 + paceScore * 0.3 + stability * 0.2);
     const paceVolume = Math.round(paceScore * 0.6 + volScore * 0.4);
-    const score = Math.round(
-      completeness * 0.3 +
-        accuracy * 0.2 +
-        fluency * 0.2 +
-        expression * 0.15 +
-        paceVolume * 0.15,
+    const rawScores = [completeness, fluency, expression, paceVolume];
+    const averageScore = rawScores.reduce((sum, value) => sum + value, 0) / rawScores.length;
+    const balancedScores = rawScores.map((value) =>
+      Math.round(value * 0.65 + averageScore * 0.35),
     );
-    return { completeness, accuracy, fluency, expression, paceVolume, score };
-  }, [progress, mode, charCount, scriptCount, fillerDensity, pace, averageVolume, audioMetrics]);
+    const [finalCompleteness, finalFluency, finalExpression, finalPaceVolume] = balancedScores;
+    const score = Math.round(
+      finalCompleteness * 0.35 +
+        finalFluency * 0.2 +
+        finalExpression * 0.2 +
+        finalPaceVolume * 0.25,
+    );
+    return {
+      completeness: finalCompleteness,
+      fluency: finalFluency,
+      expression: finalExpression,
+      paceVolume: finalPaceVolume,
+      score,
+    };
+  }, [progress, hasReport, structureCompleteness, fillerDensity, pace, averageVolume, audioMetrics]);
 
   const reportSummary = hasReport
-    ? metrics.score >= 70
-      ? "整体表达已经稳定，可以进入脱稿演练。"
-      : metrics.score >= 50
-        ? "已达到进入脱稿演练的最低标准。"
-        : "建议先重新跟读一遍，把内容说完整。"
+    ? structureIssues.length
+      ? "结构还不完整，报告里已标出需要补强的部分。"
+      : metrics.score >= 70
+        ? "整体表达已经稳定，可以进入脱稿演练。"
+        : metrics.score >= 50
+          ? "已达到进入脱稿演练的最低标准。"
+          : "建议先重新跟读一遍，把内容说完整。"
     : "完成一次真实训练后，这里会给出评分和建议。";
-
-  const reportSuggestion = useMemo(() => {
-    if (!hasReport) return "训练结束后，这里会给出下一遍最该改的一句话。";
-    if (fillerTotal >= 3) {
-      const top = fillerStats
-        .slice(0, 2)
-        .map((item) => `“${item.word}”`)
-        .join("、");
-      return `下一遍先减少${top}这类口头词，想好下一句再开口。`;
-    }
-    if (metrics.completeness < 60) {
-      return "识别内容只覆盖了一部分原稿，下一遍先把稿件读完整。";
-    }
-    if (pace > 220) return "语速偏快，下一遍放慢节奏，重点字可以稍微停顿。";
-    if (pace > 0 && pace < 90) return "语速偏慢，下一遍减少停顿，让整段话更连贯。";
-    if (metrics.expression < 60) return "声音状态还不够稳，下一遍先保持稳定音量，再补细节。";
-    return "整体完成度不错，下一遍把最常出现的口头词换成停顿。";
-  }, [hasReport, fillerTotal, fillerStats, metrics, pace]);
 
   async function startRecording() {
     if (isRecording) return;
     setErrorMessage("");
     setHasReport(false);
+    setAiReport(null);
+    setIsGeneratingReport(false);
     setTranscript("");
     setInterimText("");
     setAudioMetrics(null);
@@ -512,6 +894,61 @@ export default function Home() {
     }
   }
 
+  async function generateAiReport(text: string) {
+    if (!apiConfig.apiKey.trim() || !text.trim()) return;
+    setAiReport(null);
+    setIsGeneratingReport(true);
+    const localCharCount = text.replace(/\s/g, "").length;
+    const localPace =
+      elapsedRef.current > 0
+        ? Math.round((localCharCount / elapsedRef.current) * 60)
+        : 0;
+    try {
+      const response = await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: apiConfig.apiKey,
+          model: apiConfig.model,
+          baseUrl: apiConfig.baseUrl,
+          transcript: text,
+          lesson: {
+            title: activeLesson?.title ?? "",
+            day: activeLesson?.title ?? "",
+            goal: activeLesson?.goal ?? "",
+            template: activeLesson?.template ?? "",
+            question: activeLesson?.question ?? "",
+          },
+          metrics: {
+            completeness: metrics.completeness,
+            fluency: metrics.fluency,
+            expression: metrics.expression,
+            pace: localPace,
+            averageVolume: audioMetrics?.averageVolume ?? currentVolume,
+          },
+        }),
+      });
+      const data = (await response.json()) as {
+        ok?: boolean;
+        report?: AiReport;
+        message?: string;
+      };
+      if (data.ok && data.report) {
+        setAiReport(data.report);
+      } else {
+        setErrorMessage(data.message ?? "AI 报告生成失败，已显示本地报告。");
+      }
+    } catch {
+      setErrorMessage("AI 报告生成失败，已显示本地报告。");
+    }
+    setIsGeneratingReport(false);
+  }
+
+  async function regenerateAiReport() {
+    const text = finalTranscriptRef.current.trim() || transcript.trim();
+    if (text) await generateAiReport(text);
+  }
+
   function stopRecording() {
     if (!isRecordingRef.current) return;
     isRecordingRef.current = false;
@@ -560,44 +997,33 @@ export default function Home() {
     }
     setErrorMessage("");
     setHasReport(true);
+    void generateAiReport(text);
   }
 
   function finishPractice() {
     if (isRecording) stopRecording();
   }
 
-  function applySuggestion() {
-    const cleaned = script
-      .replaceAll("然后", "")
-      .replaceAll("就是", "")
-      .replaceAll("嗯", "")
-      .replaceAll("啊", "")
-      .replaceAll("那个", "")
-      .replace(/\n{3,}/g, "\n\n");
-    setScript(cleaned);
-    setHasReport(false);
-    setTranscript("");
-    setInterimText("");
-    setAudioMetrics(null);
-    finalTranscriptRef.current = "";
-    interimRef.current = "";
-  }
-
   return (
     <main className="product">
       <div className="top-mode-bar" aria-label="训练模式">
-        <button className={mode === "read" ? "selected" : ""} onClick={() => setMode("read")} type="button">
-          话术跟练
-        </button>
-        <button className={mode === "free" ? "selected" : ""} onClick={() => setMode("free")} type="button">
-          脱稿演练
+        <div className="top-mode-switch">
+          <button className={mode === "read" ? "selected" : ""} onClick={() => setMode("read")} type="button">
+            话术跟练
+          </button>
+          <button className={mode === "free" ? "selected" : ""} onClick={() => setMode("free")} type="button">
+            脱稿演练
+          </button>
+        </div>
+        <button type="button" className="api-settings-button" onClick={() => setIsSettingsOpen(true)}>
+          {apiConfig.apiKey ? apiConfig.provider : "模型设置"}
         </button>
       </div>
       <aside className="course-rail">
         <div className="brand-block">
           <div className="brand-icon">口</div>
           <div>
-            <h1>口播陪练</h1>
+            <h1>阿云的口播陪练</h1>
             <p>面向自媒体创作者的表达训练台</p>
           </div>
         </div>
@@ -605,43 +1031,58 @@ export default function Home() {
         <div className="rail-section">
           <div className="section-heading">
             <span>我的课程</span>
-            <button type="button">加入</button>
+            <button type="button" onClick={() => setIsEditorOpen(true)}>编辑</button>
           </div>
-          <div className="course-stack">
-            {courses.map((course) => (
-              <button
-                type="button"
-                key={course.id}
-                className={`course-card ${activeCourse.id === course.id ? "active" : ""}`}
-                onClick={() => setActiveCourse(course)}
-              >
-                <div className="course-card-top">
-                  <strong>{course.title}</strong>
-                  <span>{course.status}</span>
+          <div className="category-stack">
+            {categories.map((category) => {
+              const completedCount = category.lessons.filter(
+                (lesson) => lesson.status === "已完成",
+              ).length;
+              return (
+                <div key={category.id} className="category-block">
+                  <button
+                    type="button"
+                    className="category-head"
+                    onClick={() => toggleCategory(category.id)}
+                  >
+                    <span className="category-title">{category.title}</span>
+                    <span className="category-meta">
+                      {completedCount}/{category.lessons.length} 节 ·{" "}
+                      {category.expanded ? "收起" : "展开"}
+                    </span>
+                  </button>
+                  {category.expanded && (
+                    <div className="lesson-list">
+                      {category.lessons.map((lesson) => (
+                        <button
+                          type="button"
+                          key={lesson.id}
+                          className={`lesson-row ${activeLesson?.id === lesson.id ? "active" : ""}`}
+                          onClick={() => selectLesson(category.id, lesson.id)}
+                        >
+                          <span className="lesson-title">{lesson.title}</span>
+                          <span className={`lesson-status ${lesson.status}`}>{lesson.status}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <p>
-                  {course.currentDay} · {course.goal}
-                </p>
-                <div className="progress-track">
-                  <div style={{ width: `${course.progress}%` }} />
-                </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         </div>
 
-        <div className="rail-section quiet">
-          <span>底层风格库</span>
-          <p>对标博主风格不会展示给学员，只用于课程识别、评分和句子优化。</p>
-        </div>
       </aside>
 
       <section className="studio">
         <header className="studio-header">
           <div>
-            <div className="crumb">{activeCourse.currentDay}</div>
-            <h2>{activeCourse.goal}</h2>
-            <p>{activeCourse.template}</p>
+            <div className="crumb">
+              {activeLesson?.title ?? ""} · 第 {Math.max(1, activeLessonIndex + 1)} /{" "}
+              {activeCourse?.lessons.length ?? 0} 节
+            </div>
+            <h2>{activeLesson?.goal ?? ""}</h2>
+            <p>{activeLesson?.template ?? ""}</p>
           </div>
         </header>
 
@@ -649,34 +1090,94 @@ export default function Home() {
           <section className="script-panel">
             <div className="panel-head">
               <div>
-                <span>{mode === "read" ? "原稿区" : "训练题目"}</span>
-                <h3>{activeCourse.question}</h3>
+                <span>{mode === "free" ? "训练题目" : ""}</span>
+                <h3>{activeLesson?.question ?? ""}</h3>
               </div>
+              {mode === "read" && (
+                <div className="script-tabs" aria-label="原稿视图">
+                  <button
+                    type="button"
+                    className={scriptTab === "example" ? "selected" : ""}
+                    onClick={() => setScriptTab("example")}
+                  >
+                    示例
+                  </button>
+                  <button
+                    type="button"
+                    className={scriptTab === "mine" ? "selected" : ""}
+                    onClick={() => setScriptTab("mine")}
+                  >
+                    我的稿件
+                  </button>
+                </div>
+              )}
             </div>
             {mode === "read" ? (
-              <div className="script-field">
-                <textarea value={script} onChange={(event) => setScript(event.target.value)} />
-                {!script.trim() && (
-                  <div className="script-placeholder" aria-hidden="true">
-                    <div className="placeholder-guide">
-                      <p>学习目标：{activeCourse.goal}</p>
-                      <p>核心结构：{activeCourse.template}</p>
-                      <p className="placeholder-question">题目：{activeCourse.question}</p>
+              <>
+                <div className="lesson-guide">
+                  <p>
+                    <span>学习目标</span>
+                    {activeLesson?.goal ?? ""}
+                  </p>
+                  <p>
+                    <span>核心结构</span>
+                    {activeLesson?.template ?? ""}
+                  </p>
+                  <p className="question">
+                    <span>题目</span>
+                    {activeLesson?.question ?? ""}
+                  </p>
+                </div>
+                {scriptTab === "example" ? (
+                  <div className="example-view">
+                    {(activeLesson?.exampleParts ?? []).map((part, index) => (
+                      <span key={part.label} className={`example-segment part-${index % 5}`}>
+                        <b>{part.label}</b>
+                        {part.text}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="script-field">
+                    <div className="paste-row">
+                      <textarea
+                        className="paste-box"
+                        value={pasteText}
+                        onChange={(event) => setPasteText(event.target.value)}
+                        onPaste={(event) => {
+                          const pasted = event.clipboardData.getData("text");
+                          if (pasted.trim()) {
+                            event.preventDefault();
+                            handlePasteScript(pasted);
+                          }
+                        }}
+                        placeholder="在这里粘贴你的口播稿，系统会自动拆成结构部分"
+                      />
+                      <button type="button" onClick={() => handlePasteScript(pasteText)}>
+                        自动拆分
+                      </button>
                     </div>
-                    <div className="placeholder-example">
-                      {activeCourse.exampleParts.map((part, index) => (
-                        <span key={part.label} className={`example-segment part-${index % 5}`}>
-                          <b>{part.label}</b>
-                          {part.text}
-                        </span>
-                      ))}
-                    </div>
+                    {scriptParts.length ? (
+                      <div className="part-editors">
+                        {scriptParts.map((part, index) => (
+                          <div key={`${part.label}-${index}`} className={`part-editor part-${index % 5}`}>
+                            <label>{part.label}</label>
+                            <textarea
+                              value={part.text}
+                              onChange={(event) => updateScriptPart(index, event.target.value)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="empty-paste-hint">粘贴后会自动拆分，也可以在这里继续手动修改</div>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
             ) : (
               <div className="free-prompt">
-                <p>{activeCourse.question}</p>
+                <p>{activeLesson?.question ?? ""}</p>
               </div>
             )}
           </section>
@@ -730,24 +1231,119 @@ export default function Home() {
         <section className="report-card">
           <div className="report-left">
             <span>训练报告</span>
-            <h3>{hasReport ? `${metrics.score} 分` : "完成一次训练后生成报告"}</h3>
-            <p>{reportSummary}</p>
+            <h3>
+              {hasReport
+                ? `${aiReport?.score ?? metrics.score} 分`
+                : "完成一次训练后生成报告"}
+            </h3>
+            <p>{aiReport?.summary || reportSummary}</p>
+            {hasReport && !apiConfig.apiKey && (
+              <p className="report-hint">配置模型后会自动生成完整 AI 报告</p>
+            )}
+            {hasReport && apiConfig.apiKey && !isGeneratingReport && (
+              <button type="button" className="regenerate-report" onClick={regenerateAiReport}>
+                重新生成 AI 报告
+              </button>
+            )}
+            {hasReport &&
+              (aiReport?.score ?? metrics.completeness) >= 70 &&
+              activeLessonIndex < (activeCourse?.lessons.length ?? 0) - 1 && (
+                <button type="button" className="next-lesson" onClick={completeActiveLesson}>
+                  进入下一课
+                </button>
+              )}
           </div>
           <div className="score-strip">
             <Score label="完整度" value={hasReport ? metrics.completeness : undefined} />
-            <Score label="准确度" value={hasReport ? metrics.accuracy : undefined} />
             <Score label="流畅度" value={hasReport ? metrics.fluency : undefined} />
             <Score label="表达状态" value={hasReport ? metrics.expression : undefined} />
             <Score label="语速音量" value={hasReport ? metrics.paceVolume : undefined} />
           </div>
-          <div className="suggestion">
-            <strong>句子级优化</strong>
-            <p>{reportSuggestion}</p>
-            <button type="button" disabled={!hasReport} onClick={applySuggestion}>
-              应用优化稿继续练
-            </button>
-          </div>
+          {hasReport && (
+            <div className="structure-values">
+              {structureChecks.map((check) => (
+                <div key={check.label} className={`structure-value ${check.status}`}>
+                  <span>{check.label}</span>
+                  <strong>{check.score}分</strong>
+                  <i>{check.status}</i>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
+        {hasReport && isGeneratingReport && (
+          <div className="browser-warning">AI 报告生成中…</div>
+        )}
+        {hasReport && aiReport && (
+          <div className="ai-report">
+            {aiReport.summary && (
+              <section className="ai-report-section">
+                <strong>整段分析</strong>
+                <p>{aiReport.summary}</p>
+              </section>
+            )}
+            {aiReport.strengths && aiReport.strengths.length > 0 && (
+              <section className="ai-report-section">
+                <strong>讲得好的地方</strong>
+                <ul>
+                  {aiReport.strengths.map((item, index) => (
+                    <li key={`strength-${index}`}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {aiReport.sentence_fixes && aiReport.sentence_fixes.length > 0 && (
+              <section className="ai-report-section">
+                <strong>逐句优化</strong>
+                <div className="fix-list">
+                  {aiReport.sentence_fixes.map((fix, index) => (
+                    <div key={`fix-${index}`} className="fix-item">
+                      <p>原句：{fix.original}</p>
+                      <p>改写：{fix.rewritten}</p>
+                      {fix.reason && <p>原因：{fix.reason}</p>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            {aiReport.high_frequency_words && aiReport.high_frequency_words.length > 0 && (
+              <section className="ai-report-section">
+                <strong>高频用词</strong>
+                <ul>
+                  {aiReport.high_frequency_words.map((item, index) => (
+                    <li key={`word-${index}`}>
+                      {item.word}
+                      {typeof item.count === "number" ? `（${item.count} 次）` : ""}：
+                      {item.suggestion ?? ""}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {aiReport.key_issues && aiReport.key_issues.length > 0 && (
+              <section className="ai-report-section">
+                <strong>本次重点问题</strong>
+                <ul>
+                  {aiReport.key_issues.map((item, index) => (
+                    <li key={`issue-${index}`}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {aiReport.optimization_direction && (
+              <section className="ai-report-section">
+                <strong>优化方向</strong>
+                <p>{aiReport.optimization_direction}</p>
+              </section>
+            )}
+            {aiReport.next_step && (
+              <section className="ai-report-section">
+                <strong>下一步建议</strong>
+                <p>{aiReport.next_step}</p>
+              </section>
+            )}
+          </div>
+        )}
       </section>
 
       <aside className="feedback-rail">
@@ -790,6 +1386,252 @@ export default function Home() {
           </div>
         </section>
       </aside>
+
+      {isSettingsOpen && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsSettingsOpen(false);
+          }}
+        >
+          <div className="modal-panel settings-panel" role="dialog" aria-modal="true" aria-label="模型设置">
+            <div className="modal-head">
+              <h3>模型设置</h3>
+              <button type="button" onClick={() => setIsSettingsOpen(false)}>
+                关闭
+              </button>
+            </div>
+            <div className="add-form">
+              <label>
+                服务商
+                <select value={apiConfig.provider} onChange={(event) => handleProviderChange(event.target.value)}>
+                  {providerPresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                API Key
+                <input
+                  type="password"
+                  value={apiConfig.apiKey}
+                  onChange={(event) =>
+                    setApiConfig((prev) => ({ ...prev, apiKey: event.target.value }))
+                  }
+                  placeholder="sk-..."
+                />
+              </label>
+              <label>
+                模型名称
+                <input
+                  value={apiConfig.model}
+                  onChange={(event) =>
+                    setApiConfig((prev) => ({ ...prev, model: event.target.value }))
+                  }
+                  placeholder="deepseek-chat"
+                />
+              </label>
+              <label>
+                Base URL
+                <input
+                  value={apiConfig.baseUrl}
+                  onChange={(event) =>
+                    setApiConfig((prev) => ({ ...prev, baseUrl: event.target.value }))
+                  }
+                  placeholder="https://api.deepseek.com"
+                />
+                <p className="field-hint">系统会自动补 /chat/completions</p>
+              </label>
+              {testStatus.message && (
+                <div className={`test-status ${testStatus.state}`}>{testStatus.message}</div>
+              )}
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={testStatus.state === "testing"}
+                  onClick={testApiConnection}
+                >
+                  {testStatus.state === "testing" ? "测试中…" : "测试连接"}
+                </button>
+                <button type="button" onClick={() => setIsSettingsOpen(false)}>
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isEditorOpen && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsEditorOpen(false);
+          }}
+        >
+          <div className="modal-panel" role="dialog" aria-modal="true" aria-label="课程管理">
+            <div className="modal-head">
+              <h3>{isAdding ? (isNewCourse ? "新建课程" : "添加课程") : "课程管理"}</h3>
+              <div className="modal-actions">
+                {!isAdding && (
+                  <button type="button" className="primary" onClick={openNewCourseForm}>
+                    新建课程
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditorOpen(false);
+                    setIsAdding(false);
+                    setIsNewCourse(false);
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+            {errorMessage && <div className="browser-warning">{errorMessage}</div>}
+            {!isAdding && !editingCourseId ? (
+              <div className="course-card-grid">
+                {categories.map((category) => {
+                  const isBuiltIn = builtInCategoryIds.has(category.id);
+                  const completedCount = category.lessons.filter(
+                    (lesson) => lesson.status === "已完成",
+                  ).length;
+                  return (
+                    <div
+                      key={category.id}
+                      className={`manage-course-card ${isBuiltIn ? "builtin" : "custom"}`}
+                    >
+                      <strong>{category.title}</strong>
+                      <span>{category.lessons.length} 节</span>
+                      <span>{completedCount} 节已完成</span>
+                      {!isBuiltIn && (
+                        <div className="course-card-actions">
+                          <button type="button" onClick={() => openEditCourse(category.id)}>
+                            修改
+                          </button>
+                          <button type="button" onClick={() => deleteCustomCourse(category.id)}>
+                            删除课程
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : editingCourseId ? (
+              <div className="add-form">
+                <label>
+                  课程名称
+                  <input
+                    value={newCourseName}
+                    onChange={(event) => setNewCourseName(event.target.value)}
+                    placeholder="课程名称"
+                  />
+                </label>
+                <div className="form-actions">
+                  <button type="button" className="primary" onClick={saveCourseRename}>
+                    保存修改
+                  </button>
+                  <button type="button" onClick={() => setEditingCourseId(null)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="add-form">
+                {isNewCourse ? (
+                  <label>
+                    课程分类名称
+                    <input
+                      value={newCourseName}
+                      onChange={(event) => setNewCourseName(event.target.value)}
+                      placeholder="例如：职场口播训练"
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    分类
+                    <select
+                      value={draftCategoryId}
+                      onChange={(event) => setDraftCategoryId(event.target.value)}
+                    >
+                      {categories
+                        .filter((category) => !builtInCategoryIds.has(category.id))
+                        .map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.title}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                )}
+                <label>
+                  课程标题
+                  <input
+                    value={draft.title}
+                    onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                    placeholder="Day 1 · 课程名称"
+                  />
+                </label>
+                <label>
+                  学习目标
+                  <input
+                    value={draft.goal}
+                    onChange={(event) => setDraft({ ...draft, goal: event.target.value })}
+                    placeholder="解决什么问题"
+                  />
+                </label>
+                <label>
+                  核心结构
+                  <input
+                    value={draft.template}
+                    onChange={(event) => setDraft({ ...draft, template: event.target.value })}
+                    placeholder="结论 + 原因 + 细节 + 感受"
+                  />
+                </label>
+                <label>
+                  题目
+                  <input
+                    value={draft.question}
+                    onChange={(event) => setDraft({ ...draft, question: event.target.value })}
+                    placeholder="今天要回答的问题"
+                  />
+                </label>
+                <label>
+                  示例（按结构分行填写）
+                  <textarea
+                    value={draft.exampleText}
+                    onChange={(event) => setDraft({ ...draft, exampleText: event.target.value })}
+                    placeholder={"结论：示例内容\n原因：示例内容\n细节：示例内容\n感受：示例内容"}
+                    rows={8}
+                  />
+                </label>
+                <div className="form-actions">
+                  <button type="button" className="primary" onClick={saveLesson}>
+                    保存课程
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAdding(false);
+                      setIsNewCourse(false);
+                    }}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }

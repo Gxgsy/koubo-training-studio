@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "口播陪练",
+  title: "阿云的口播陪练",
   description: "面向自媒体创作者的稿件跟读、脱稿演练和表达反馈训练台。",
   icons: {
     icon: "/favicon.svg",
