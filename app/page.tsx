@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { defaultCategories, type Course } from "./course-data";
+import { defaultCategories, type Course, type Lesson } from "./course-data";
 
 type SpeechRecognitionAlternative = {
   transcript: string;
@@ -76,18 +76,83 @@ type StructureCheck = {
 };
 
 const structureSignals: Record<string, { strong: string[]; weak: string[] }> = {
-  结论: { strong: ["我觉得", "我认为", "我的答案是", "我推荐", "最值", "答案是", "应该"], weak: ["是", "最", "比", "更"] },
-  原因: { strong: ["因为", "为了", "由于", "之所以"], weak: ["原因", "不", "都", "每天"] },
-  细节: { strong: ["以前", "现在", "的时候", "比如", "有一次", "每天", "当时"], weak: ["我", "他", "她", "东西", "手机"] },
-  感受: { strong: ["我觉得", "我感觉", "感受", "开心", "烦", "值", "喜欢", "感谢", "理解", "心情"], weak: ["很", "挺", "有点"] },
-  误区: { strong: ["误区", "很多人", "总以为", "刚开始", "一开始", "以为"], weak: ["错误", "错", "问题"] },
-  纠偏: { strong: ["其实", "应该", "正确", "不是", "真正", "先"], weak: ["但", "要", "会"] },
-  例子: { strong: ["比如", "例如", "有一次", "举个例子", "以前"], weak: ["我", "他", "她", "一个", "每天"] },
-  行动任务: { strong: ["今天", "下一步", "先", "每天", "试试", "可以", "任务"], weak: ["去", "做", "录"] },
-  场景: { strong: ["那天", "前几天", "有一次", "晚上", "早上", "家", "楼下", "的时候"], weak: ["我", "她", "他", "看到"] },
-  普遍问题: { strong: ["其实", "我们", "很多人", "很少", "问题", "背后"], weak: ["都", "会", "总"] },
-  判断: { strong: ["所以", "我觉得", "我认为", "现在", "愿意"], weak: ["我", "是"] },
-  收尾: { strong: ["最后", "所以", "这件事", "反而", "让我", "新的"], weak: ["了", "吗"] },
+  结论: { strong: ["我觉得", "我认为", "我的答案是", "我的看法是", "我推荐", "我更喜欢", "最值", "答案是", "应该", "观点"], weak: ["是", "最", "比", "更"] },
+  原因: { strong: ["因为", "为了", "由于", "之所以", "关键是", "最重要的是"], weak: ["原因", "不", "都", "每天"] },
+  细节: { strong: ["以前", "现在", "的时候", "比如", "有一次", "每天", "当时", "先", "然后", "具体"], weak: ["我", "他", "她", "东西", "手机"] },
+  感受: { strong: ["我觉得", "我感觉", "感受", "开心", "烦", "值", "喜欢", "感谢", "理解", "心情", "发现", "原来", "才明白", "意识到"], weak: ["很", "挺", "有点"] },
+  误区: { strong: ["误区", "很多人", "总以为", "刚开始", "一开始", "以为", "遇到过"], weak: ["错误", "错", "问题"] },
+  纠偏: { strong: ["其实", "应该", "正确", "不是", "真正", "先", "更建议", "区别"], weak: ["但", "要", "会"] },
+  例子: { strong: ["比如", "例如", "有一次", "举个例子", "比如说", "以前"], weak: ["我", "他", "她", "一个", "每天"] },
+  行动任务: { strong: ["今天", "下一步", "先", "每天", "试试", "可以", "任务", "我会", "建议", "方法", "怎么"], weak: ["去", "做", "录"] },
+  场景: { strong: ["那天", "前几天", "有一次", "晚上", "早上", "家", "楼下", "的时候", "当时", "以前"], weak: ["我", "她", "他", "看到"] },
+  普遍问题: { strong: ["其实", "我们", "很多人", "很少", "问题", "背后", "遇到过", "总是", "经常"], weak: ["都", "会", "总"] },
+  判断: { strong: ["所以", "我觉得", "我认为", "现在", "愿意", "更喜欢"], weak: ["我", "是"] },
+  收尾: { strong: ["最后", "所以", "这件事", "反而", "让我", "新的", "总结", "对我来说"], weak: ["了", "吗"] },
+  人群: { strong: ["适合", "谁", "人群", "大家", "普通人", "人"], weak: ["都", "有", "会"] },
+  概念: { strong: ["就是", "指的是", "简单说", "可以理解成", "本质", "意思是", "其实"], weak: ["是", "一个", "这个"] },
+};
+
+// 结构标签别名：把课程里各种写法的标签，归到上面词库对应的语义分组。
+// 判断只要求语义相近，不要求字面一致。
+const structureLabelAliases: Record<string, string> = {
+  我的答案是: "结论",
+  我认为: "结论",
+  我的看法是: "结论",
+  所以我的看法是: "结论",
+  我推荐什么: "结论",
+  明确观点: "结论",
+  我想到的是: "结论",
+  结果先行: "结论",
+  结论先行: "结论",
+  先给结论: "结论",
+  直接给结论: "结论",
+  为什么: "原因",
+  最关键原因: "原因",
+  为什么想到它: "原因",
+  我为什么会这样: "原因",
+  举个例子: "例子",
+  举例: "例子",
+  一个例子: "例子",
+  一个具体例子: "例子",
+  具体例子: "例子",
+  生活例子: "例子",
+  一句总结: "收尾",
+  一句收尾: "收尾",
+  自然收尾: "收尾",
+  结果怎样: "收尾",
+  结果: "收尾",
+  抽象判断: "判断",
+  进入正文: "判断",
+  具体场景: "场景",
+  一个具体场景: "场景",
+  当时情况: "场景",
+  痛点开头: "场景",
+  发生了什么: "场景",
+  具体动作: "行动任务",
+  我做了什么: "行动任务",
+  我怎么处理: "行动任务",
+  后来怎么处理: "行动任务",
+  方法建议: "行动任务",
+  行动: "行动任务",
+  遇到的问题: "普遍问题",
+  当时的问题: "普遍问题",
+  你有没有遇到过: "普遍问题",
+  很多人会这样: "普遍问题",
+  问题: "普遍问题",
+  我的变化: "感受",
+  我当时的感受: "感受",
+  我的发现: "感受",
+  得到的想法: "感受",
+  但我更建议这样: "纠偏",
+  区别在哪里: "纠偏",
+  注意点: "纠偏",
+  适合谁: "人群",
+  人群: "人群",
+  这个概念是什么: "概念",
+  普通人怎么理解: "概念",
+  我的内容: "细节",
+  具体好在哪: "细节",
+  有什么用: "细节",
 };
 
 function evaluateStructure(
@@ -96,7 +161,8 @@ function evaluateStructure(
 ): StructureCheck[] {
   const normalized = normalizeForCompare(text);
   return lesson.exampleParts.map((part) => {
-    const signals = structureSignals[part.label] ?? { strong: [], weak: [] };
+    const key = structureLabelAliases[part.label] ?? part.label;
+    const signals = structureSignals[key] ?? { strong: [], weak: [] };
     const strongHits = signals.strong.filter((word) => normalized.includes(word)).length;
     const weakHits = signals.weak.filter((word) => normalized.includes(word)).length;
     const score =
@@ -112,9 +178,17 @@ function evaluateStructure(
 
 type PracticeMode = "read" | "free";
 
+type LessonDraft = {
+  title: string;
+  goal: string;
+  template: string;
+  question: string;
+  exampleText: string;
+};
+
 const fillerWords = ["然后", "就是", "嗯", "啊", "那个", "所以", "呃"];
 
-const builtInCategoryIds = new Set(["default", "creator", "emotion"]);
+const builtInCategoryIds = new Set(["default", "free", "emotion"]);
 
 type ApiConfig = {
   provider: string;
@@ -231,14 +305,81 @@ function readStoredCategories(): Course[] {
     const raw = window.localStorage.getItem("koubo-courses-v1");
     if (raw) {
       const parsed = JSON.parse(raw) as Course[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // 迁移规则：
+        // - 保留用户对所有课程的修改与新增的课程节（不重置）
+        // - 默认课程里新增的课程节自动补上
+        // - 已移除的旧内置课程（如“自媒体起号口播专项”）不再出现
+        // - 用户自建课程原样保留
+        const defaultCourseMap = new Map(defaultCategories.map((c) => [c.id, c]));
+        const storedMap = new Map(parsed.map((c) => [c.id, c]));
+        const legacyBuiltInIds = new Set(["default", "creator", "emotion", "free"]);
+        const merged: Course[] = [];
+        for (const def of defaultCategories) {
+          const stored = storedMap.get(def.id);
+          if (!stored) {
+            merged.push(def);
+            continue;
+          }
+          const storedLessonIds = new Set(stored.lessons.map((l) => l.id));
+          const combinedLessons = [...stored.lessons];
+          for (const dl of def.lessons) {
+            if (!storedLessonIds.has(dl.id)) combinedLessons.push(dl);
+          }
+          merged.push({ ...def, lessons: combinedLessons });
+        }
+        for (const course of parsed) {
+          if (legacyBuiltInIds.has(course.id) || defaultCourseMap.has(course.id)) continue;
+          merged.push(course);
+        }
+        return merged;
+      }
     }
   } catch { /* ignore */ }
   return defaultCategories;
 }
 
+function examplePartsToText(parts: { label: string; text: string }[]): string {
+  return parts.map((part) => `${part.label}：${part.text}`).join("\n");
+}
+
+function parseExampleText(text: string): { label: string; text: string }[] {
+  const parts = text
+    .split("\n")
+    .map((line) => {
+      const colonIndex = line.indexOf("：");
+      const asciiColon = line.indexOf(":");
+      const index = colonIndex >= 0 ? colonIndex : asciiColon;
+      if (index <= 0) return null;
+      return {
+        label: line.slice(0, index).trim(),
+        text: line.slice(index + 1).trim(),
+      };
+    })
+    .filter(
+      (part): part is { label: string; text: string } => Boolean(part && part.text),
+    );
+  if (parts.length === 0 && text.trim()) {
+    parts.push({ label: "示例", text: text.trim() });
+  }
+  return parts;
+}
+
+// 给语音识别出的一句话补标点：连接词后补逗号，句尾补句号。
+function punctuateSegment(text: string): string {
+  let t = text.trim();
+  if (!t) return "";
+  t = t.replace(
+    /(然后|但是|不过|所以|因为|如果|其实|就是|比如|比如说|例如|现在|以前|后来|当时|我觉得|我认为|说实话|首先|其次|另外|还有|而且|虽然|最后)(?!，|。|！|？|,|!|\.|\?|$)/g,
+    "$1，",
+  );
+  if (!/[。！？.!?]$/.test(t)) t += "。";
+  return t;
+}
+
 export default function Home() {
-  const [categories, setCategories] = useState<Course[]>(readStoredCategories);
+  const [categories, setCategories] = useState<Course[]>(defaultCategories);
+  const [hydrated, setHydrated] = useState(false);
   const [activeCategoryId, setActiveCategoryId] = useState(defaultCategories[0].id);
   const [activeLessonId, setActiveLessonId] = useState(defaultCategories[0].lessons[0].id);
   const [mode, setMode] = useState<PracticeMode>("read");
@@ -264,17 +405,19 @@ export default function Home() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [draftCategoryId, setDraftCategoryId] = useState(defaultCategories[0].id);
-  const [draft, setDraft] = useState({
-    title: "",
-    goal: "",
-    template: "",
-    question: "",
-    exampleText: "",
-  });
+  const [draftLessons, setDraftLessons] = useState<LessonDraft[]>([]);
+  const [expandedDraft, setExpandedDraft] = useState<number | null>(null);
   const [isNewCourse, setIsNewCourse] = useState(false);
   const [newCourseName, setNewCourseName] = useState("");
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
-  const [apiConfig, setApiConfig] = useState<ApiConfig>(readStoredApiConfig);
+  const [manageCourseId, setManageCourseId] = useState<string | null>(null);
+  const [expandedLessonId, setExpandedLessonId] = useState<string | null>(null);
+  const [apiConfig, setApiConfig] = useState<ApiConfig>(() => ({
+    provider: "deepseek",
+    apiKey: "",
+    model: "deepseek-chat",
+    baseUrl: "https://api.deepseek.com",
+  }));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [aiReport, setAiReport] = useState<AiReport | null>(null);
@@ -291,20 +434,31 @@ export default function Home() {
   const activeLessonIndex = activeCourse?.lessons.findIndex(
     (lesson) => lesson.id === activeLesson?.id,
   ) ?? -1;
+  const freeModule = activeCourse?.kind === "free";
+  const manageCourse = categories.find((category) => category.id === manageCourseId) ?? null;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // 首帧用默认数据渲染（与服务器一致），挂载后再读取本地保存的课程与模型配置；
+    // 只有读完本地数据后才允许保存，避免默认数据覆盖用户进度。
+    setCategories(readStoredCategories());
+    setApiConfig(readStoredApiConfig());
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hydrated) return;
     try {
       window.localStorage.setItem("koubo-courses-v1", JSON.stringify(categories));
     } catch { /* ignore */ }
-  }, [categories]);
+  }, [categories, hydrated]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !hydrated) return;
     try {
       window.localStorage.setItem("koubo-api-config-v1", JSON.stringify(apiConfig));
     } catch { /* ignore */ }
-  }, [apiConfig]);
+  }, [apiConfig, hydrated]);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -369,7 +523,10 @@ export default function Home() {
 
   function handlePasteScript(text: string) {
     const labels = activeLesson?.exampleParts.map((part) => part.label) ?? [];
-    const parts = splitScriptByStructure(text, labels);
+    const parts =
+      freeModule || labels.length === 0
+        ? [{ label: "我的稿件", text: text.trim() }]
+        : splitScriptByStructure(text, labels);
     setScriptParts(parts);
     setScript(parts.map((part) => part.text).join(""));
     setPasteText("");
@@ -429,7 +586,10 @@ export default function Home() {
   function selectLesson(categoryId: string, lessonId: string) {
     setActiveCategoryId(categoryId);
     setActiveLessonId(lessonId);
+    const isFree = categories.find((category) => category.id === categoryId)?.kind === "free";
+    if (isFree) setScriptTab("mine");
     resetPracticeView();
+    if (isFree) return;
     setCategories((prev) =>
       prev.map((category) => {
         if (category.id !== categoryId) return category;
@@ -509,7 +669,8 @@ export default function Home() {
 
   function openNewCourseForm() {
     setDraftCategoryId("");
-    setDraft({ title: "", goal: "", template: "", question: "", exampleText: "" });
+    setDraftLessons([{ title: "", goal: "", template: "", question: "", exampleText: "" }]);
+    setExpandedDraft(0);
     setNewCourseName("");
     setIsNewCourse(true);
     setIsAdding(true);
@@ -556,74 +717,189 @@ export default function Home() {
     }
   }
 
-  function saveLesson() {
-    if (
-      (isNewCourse && !newCourseName.trim()) ||
-      !draft.title.trim() ||
-      !draft.goal.trim() ||
-      !draft.template.trim() ||
-      !draft.question.trim()
-    ) {
-      setErrorMessage(
-        isNewCourse
-          ? "请把课程分类名称、课程标题、学习目标、核心结构和题目填写完整。"
-          : "请把课程标题、学习目标、核心结构和题目填写完整。",
-      );
-      return;
-    }
-    const exampleParts: { label: string; text: string }[] = draft.exampleText
-      .split("\n")
-      .map((line) => {
-        const colonIndex = line.indexOf("：");
-        const asciiColon = line.indexOf(":");
-        const index = colonIndex >= 0 ? colonIndex : asciiColon;
-        if (index <= 0) return null;
+  function openManageCourse(categoryId: string) {
+    setManageCourseId(categoryId);
+    setExpandedLessonId(null);
+    setEditingCourseId(null);
+    setIsAdding(false);
+    setIsNewCourse(false);
+    setErrorMessage("");
+  }
+
+  function closeManageCourse() {
+    setManageCourseId(null);
+    setExpandedLessonId(null);
+  }
+
+  function updateCourseTitle(categoryId: string, value: string) {
+    setCategories((prev) =>
+      prev.map((category) =>
+        category.id === categoryId ? { ...category, title: value } : category,
+      ),
+    );
+  }
+
+  function updateLesson(
+    categoryId: string,
+    lessonId: string,
+    field: "title" | "goal" | "template" | "question" | "exampleText",
+    value: string,
+  ) {
+    setCategories((prev) =>
+      prev.map((category) => {
+        if (category.id !== categoryId) return category;
         return {
-          label: line.slice(0, index).trim(),
-          text: line.slice(index + 1).trim(),
+          ...category,
+          lessons: category.lessons.map((lesson) => {
+            if (lesson.id !== lessonId) return lesson;
+            if (field === "exampleText") {
+              return {
+                ...lesson,
+                exampleText: value,
+                exampleParts: parseExampleText(value),
+              };
+            }
+            return { ...lesson, [field]: value };
+          }),
         };
-      })
-      .filter((part): part is { label: string; text: string } =>
-        Boolean(part && part.text),
-      );
-    if (exampleParts.length === 0 && draft.exampleText.trim()) {
-      exampleParts.push({ label: "示例", text: draft.exampleText.trim() });
-    }
+      }),
+    );
+  }
+
+  function addLessonToCourse(categoryId: string) {
     const id = `lesson-${Date.now()}`;
-    const lesson = {
-      id,
-      title: draft.title.trim(),
-      goal: draft.goal.trim(),
-      template: draft.template.trim(),
-      question: draft.question.trim(),
-      exampleParts,
-      status: "未开始" as const,
-    };
-    if (isNewCourse) {
-      const categoryId = `custom-${Date.now()}`;
-      setCategories((prev) => [
+    setCategories((prev) =>
+      prev.map((category) => {
+        if (category.id !== categoryId) return category;
+        const last = category.lessons[category.lessons.length - 1];
+        return {
+          ...category,
+          lessons: [
+            ...category.lessons,
+            {
+              id,
+              title: `Day ${category.lessons.length + 1} · 新课程`,
+              goal: last?.goal ?? "",
+              template: last?.template ?? "",
+              question: last?.question ?? "",
+              exampleParts: last?.exampleParts
+                ? last.exampleParts.map((part) => ({ ...part }))
+                : [],
+              exampleText: last?.exampleText ?? examplePartsToText(last?.exampleParts ?? []),
+              status: "未开始" as const,
+            },
+          ],
+        };
+      }),
+    );
+    setExpandedLessonId(id);
+  }
+
+  function updateDraftLesson(index: number, field: keyof LessonDraft, value: string) {
+    setDraftLessons((prev) =>
+      prev.map((lesson, i) => (i === index ? { ...lesson, [field]: value } : lesson)),
+    );
+  }
+
+  function addDraftLesson() {
+    setDraftLessons((prev) => {
+      const last = prev[prev.length - 1];
+      return [
         ...prev,
         {
-          id: categoryId,
-          title: newCourseName.trim(),
-          expanded: true,
-          lessons: [lesson],
+          title: "",
+          goal: last?.goal ?? "",
+          template: last?.template ?? "",
+          question: last?.question ?? "",
+          exampleText: last?.exampleText ?? "",
         },
-      ]);
-      setDraftCategoryId(categoryId);
-    } else {
-      setCategories((prev) =>
-        prev.map((category) =>
-          category.id === draftCategoryId
-            ? { ...category, lessons: [...category.lessons, lesson] }
-            : category,
-        ),
-      );
+      ];
+    });
+    setExpandedDraft(draftLessons.length);
+  }
+
+  function removeDraftLesson(index: number) {
+    setDraftLessons((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+    if (expandedDraft === index) setExpandedDraft(null);
+  }
+
+  function deleteLesson(categoryId: string, lessonId: string) {
+    const course = categories.find((category) => category.id === categoryId);
+    const remaining = (course?.lessons ?? []).filter((lesson) => lesson.id !== lessonId);
+    if (remaining.length === 0) {
+      setErrorMessage("至少保留一节课，可以先添加再删除。");
+      return;
     }
+    setCategories((prev) =>
+      prev.map((category) =>
+        category.id === categoryId
+          ? { ...category, lessons: remaining }
+          : category,
+      ),
+    );
+    if (activeCategoryId === categoryId && activeLessonId === lessonId) {
+      setActiveLessonId(remaining[0]?.id ?? "");
+      resetPracticeView();
+    }
+    if (expandedLessonId === lessonId) setExpandedLessonId(null);
+  }
+
+  function saveLesson() {
+    const name = newCourseName.trim();
+    if (!name) {
+      setErrorMessage("请填写课程分类名称。");
+      return;
+    }
+    const lessons: Lesson[] = draftLessons
+      .map((d, index) => {
+        const title = d.title.trim() || `Day ${index + 1} · 新课程`;
+        const exampleText = d.exampleText;
+        return {
+          id: `lesson-${Date.now()}-${index}`,
+          title,
+          goal: d.goal.trim(),
+          template: d.template.trim(),
+          question: d.question.trim(),
+          exampleParts: parseExampleText(exampleText),
+          exampleText,
+          status: "未开始" as const,
+        };
+      })
+      .filter(
+        (lesson, index) =>
+          lesson.title.trim() !== `Day ${index + 1} · 新课程` ||
+          draftLessons[index].goal.trim() ||
+          draftLessons[index].template.trim() ||
+          draftLessons[index].question.trim() ||
+          draftLessons[index].exampleText.trim(),
+      );
+    if (lessons.length === 0) {
+      setErrorMessage("请至少填写一节课程的内容。");
+      return;
+    }
+    const categoryId = `custom-${Date.now()}`;
+    setCategories((prev) => [
+      ...prev,
+      {
+        id: categoryId,
+        title: name,
+        expanded: true,
+        lessons,
+      },
+    ]);
+    setActiveCategoryId(categoryId);
+    setActiveLessonId(lessons[0]?.id ?? "");
+    resetPracticeView();
     setIsAdding(false);
     setIsNewCourse(false);
     setNewCourseName("");
+    setDraftLessons([]);
+    setExpandedDraft(null);
     setErrorMessage("");
+    setIsEditorOpen(false);
   }
 
   useEffect(() => {
@@ -689,7 +965,10 @@ export default function Home() {
   const metrics = useMemo(() => {
     const completeness = Math.max(
       0,
-      Math.min(100, hasReport ? structureCompleteness : progress),
+      Math.min(
+        100,
+        hasReport ? (structureChecks.length ? structureCompleteness : progress) : progress,
+      ),
     );
     const fluency = Math.max(0, Math.min(100, 100 - fillerDensity * 8));
     const volScore =
@@ -847,7 +1126,7 @@ export default function Home() {
           for (let i = event.resultIndex; i < event.results.length; i += 1) {
             const result = event.results[i];
             const text = result[0]?.transcript ?? "";
-            if (result.isFinal) finalDelta += text;
+            if (result.isFinal) finalDelta += punctuateSegment(text);
             else interim += text;
           }
           if (finalDelta) {
@@ -1145,8 +1424,13 @@ export default function Home() {
                   >
                     <span className="category-title">{category.title}</span>
                     <span className="category-meta">
-                      {completedCount}/{category.lessons.length} 节 ·{" "}
-                      {category.expanded ? "收起" : "展开"}
+                      {category.kind === "free"
+                        ? category.expanded
+                          ? "收起"
+                          : "展开"
+                        : `${completedCount}/${category.lessons.length} 节 · ${
+                            category.expanded ? "收起" : "展开"
+                          }`}
                     </span>
                   </button>
                   {category.expanded && (
@@ -1159,7 +1443,9 @@ export default function Home() {
                           onClick={() => selectLesson(category.id, lesson.id)}
                         >
                           <span className="lesson-title">{lesson.title}</span>
-                          <span className={`lesson-status ${lesson.status}`}>{lesson.status}</span>
+                          {category.kind !== "free" && (
+                            <span className={`lesson-status ${lesson.status}`}>{lesson.status}</span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1175,12 +1461,18 @@ export default function Home() {
       <section className="studio">
         <header className="studio-header">
           <div>
-            <div className="crumb">
-              {activeLesson?.title ?? ""} · 第 {Math.max(1, activeLessonIndex + 1)} /{" "}
-              {activeCourse?.lessons.length ?? 0} 节
-            </div>
-            <h2>{activeLesson?.goal ?? ""}</h2>
-            <p>{activeLesson?.template ?? ""}</p>
+            {freeModule ? (
+              <h2>随时练习</h2>
+            ) : (
+              <>
+                <div className="crumb">
+                  {activeLesson?.title ?? ""} · 第 {Math.max(1, activeLessonIndex + 1)} /{" "}
+                  {activeCourse?.lessons.length ?? 0} 节
+                </div>
+                <h2>{activeLesson?.goal ?? ""}</h2>
+                <p>{activeLesson?.template ?? ""}</p>
+              </>
+            )}
           </div>
           <button type="button" className="api-settings-button" onClick={() => setIsSettingsOpen(true)}>
             {apiConfig.apiKey ? apiConfig.provider : "模型设置"}
@@ -1200,10 +1492,10 @@ export default function Home() {
           <section className="script-panel">
             <div className="panel-head">
               <div>
-                <span>{mode === "free" ? "训练题目" : ""}</span>
-                <h3>{activeLesson?.question ?? ""}</h3>
+                {!freeModule && <span>{mode === "free" ? "训练题目" : ""}</span>}
+                {!freeModule && <h3>{activeLesson?.question ?? ""}</h3>}
               </div>
-              {mode === "read" && (
+              {mode === "read" && !freeModule && (
                 <div className="script-tabs" aria-label="原稿视图">
                   <button
                     type="button"
@@ -1224,21 +1516,23 @@ export default function Home() {
             </div>
             {mode === "read" ? (
               <>
-                <div className="lesson-guide">
-                  <p>
-                    <span>学习目标</span>
-                    {activeLesson?.goal ?? ""}
-                  </p>
-                  <p>
-                    <span>核心结构</span>
-                    {activeLesson?.template ?? ""}
-                  </p>
-                  <p className="question">
-                    <span>题目</span>
-                    {activeLesson?.question ?? ""}
-                  </p>
-                </div>
-                {scriptTab === "example" ? (
+                {!freeModule && (
+                  <div className="lesson-guide">
+                    <p>
+                      <span>学习目标</span>
+                      {activeLesson?.goal ?? ""}
+                    </p>
+                    <p>
+                      <span>核心结构</span>
+                      {activeLesson?.template ?? ""}
+                    </p>
+                    <p className="question">
+                      <span>题目</span>
+                      {activeLesson?.question ?? ""}
+                    </p>
+                  </div>
+                )}
+                {!freeModule && scriptTab === "example" ? (
                   <div className="example-view">
                     {(activeLesson?.exampleParts ?? []).map((part, index) => (
                       <span key={part.label} className={`example-segment part-${index % 5}`}>
@@ -1246,6 +1540,15 @@ export default function Home() {
                         {part.text}
                       </span>
                     ))}
+                  </div>
+                ) : freeModule ? (
+                  <div className="script-field">
+                    <textarea
+                      className="paste-box script-only"
+                      value={script}
+                      onChange={(event) => setScript(event.target.value)}
+                      placeholder="在这里粘贴或输入你的口播稿"
+                    />
                   </div>
                 ) : (
                   <div className="script-field">
@@ -1285,6 +1588,10 @@ export default function Home() {
                   </div>
                 )}
               </>
+            ) : freeModule ? (
+              <div className="free-prompt">
+                <p>围绕你的稿件自由表达，这里没有固定结构要求。</p>
+              </div>
             ) : (
               <div className="free-prompt">
                 <p>{activeLesson?.question ?? ""}</p>
@@ -1618,7 +1925,117 @@ export default function Home() {
               </div>
             </div>
             {errorMessage && <div className="browser-warning">{errorMessage}</div>}
-            {!isAdding && !editingCourseId ? (
+            {manageCourseId ? (
+              <div className="manage-list">
+                <div className="manage-category">
+                  <div className="manage-category-head">
+                    <input
+                      className="manage-course-name"
+                      value={manageCourse?.title ?? ""}
+                      onChange={(event) => updateCourseTitle(manageCourseId!, event.target.value)}
+                      placeholder="课程名称"
+                    />
+                    <button type="button" onClick={closeManageCourse}>
+                      返回
+                    </button>
+                  </div>
+                  <div className="manage-lessons">
+                    {manageCourse?.lessons.map((lesson) => (
+                      <div
+                        key={lesson.id}
+                        className={`manage-lesson ${expandedLessonId === lesson.id ? "editing" : ""}`}
+                      >
+                        <input
+                          className="manage-lesson-title"
+                          value={lesson.title}
+                          onChange={(event) =>
+                            updateLesson(manageCourseId!, lesson.id, "title", event.target.value)
+                          }
+                          placeholder="课程标题"
+                        />
+                        <div className="manage-actions">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedLessonId(
+                                expandedLessonId === lesson.id ? null : lesson.id,
+                              )
+                            }
+                          >
+                            {expandedLessonId === lesson.id ? "收起" : "更多"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteLesson(manageCourseId!, lesson.id)}
+                          >
+                            删除
+                          </button>
+                        </div>
+                        {expandedLessonId === lesson.id && (
+                          <div className="manage-lesson-fields">
+                            <label>
+                              学习目标
+                              <input
+                                value={lesson.goal}
+                                onChange={(event) =>
+                                  updateLesson(manageCourseId!, lesson.id, "goal", event.target.value)
+                                }
+                                placeholder="解决什么问题（选填）"
+                              />
+                            </label>
+                            <label>
+                              核心结构
+                              <input
+                                value={lesson.template}
+                                onChange={(event) =>
+                                  updateLesson(manageCourseId!, lesson.id, "template", event.target.value)
+                                }
+                                placeholder="结论 + 原因 + 细节 + 感受（选填）"
+                              />
+                            </label>
+                            <label>
+                              题目
+                              <input
+                                value={lesson.question}
+                                onChange={(event) =>
+                                  updateLesson(manageCourseId!, lesson.id, "question", event.target.value)
+                                }
+                                placeholder="今天要回答的问题（选填）"
+                              />
+                            </label>
+                            <label>
+                              示例
+                              <textarea
+                                rows={6}
+                                value={lesson.exampleText || examplePartsToText(lesson.exampleParts)}
+                                onChange={(event) =>
+                                  updateLesson(
+                                    manageCourseId!,
+                                    lesson.id,
+                                    "exampleText",
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder={"结论：示例内容\n原因：示例内容"}
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => addLessonToCourse(manageCourseId!)}
+                  >
+                    ＋ 添加一节课
+                  </button>
+                </div>
+              </div>
+            ) : !isAdding && !editingCourseId ? (
               <div className="course-card-grid">
                 {categories.map((category) => {
                   const isBuiltIn = builtInCategoryIds.has(category.id);
@@ -1633,14 +2050,16 @@ export default function Home() {
                       <strong>{category.title}</strong>
                       <span>{category.lessons.length} 节</span>
                       <span>{completedCount} 节已完成</span>
-                      {!isBuiltIn && (
+                      {category.kind !== "free" && (
                         <div className="course-card-actions">
-                          <button type="button" onClick={() => openEditCourse(category.id)}>
-                            修改
+                          <button type="button" onClick={() => openManageCourse(category.id)}>
+                            管理课程
                           </button>
-                          <button type="button" onClick={() => deleteCustomCourse(category.id)}>
-                            删除课程
-                          </button>
+                          {!isBuiltIn && (
+                            <button type="button" onClick={() => deleteCustomCourse(category.id)}>
+                              删除课程
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1668,86 +2087,114 @@ export default function Home() {
               </div>
             ) : (
               <div className="add-form">
-                {isNewCourse ? (
-                  <label>
-                    课程分类名称
-                    <input
-                      value={newCourseName}
-                      onChange={(event) => setNewCourseName(event.target.value)}
-                      placeholder="例如：职场口播训练"
-                    />
-                  </label>
-                ) : (
-                  <label>
-                    分类
-                    <select
-                      value={draftCategoryId}
-                      onChange={(event) => setDraftCategoryId(event.target.value)}
+                <label>
+                  课程分类名称
+                  <input
+                    value={newCourseName}
+                    onChange={(event) => setNewCourseName(event.target.value)}
+                    placeholder="例如：职场口播训练"
+                  />
+                </label>
+                <div className="manage-list">
+                  <div className="manage-category">
+                    <div className="manage-category-head">
+                      <strong>课程内容（每一节一课）</strong>
+                    </div>
+                    <div className="manage-lessons">
+                      {draftLessons.map((lesson, index) => (
+                        <div
+                          key={index}
+                          className={`manage-lesson ${expandedDraft === index ? "editing" : ""}`}
+                        >
+                          <input
+                            className="manage-lesson-title"
+                            value={lesson.title}
+                            onChange={(event) =>
+                              updateDraftLesson(index, "title", event.target.value)
+                            }
+                            placeholder={`Day ${index + 1} · 课程标题`}
+                          />
+                          <div className="manage-actions">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedDraft(expandedDraft === index ? null : index)
+                              }
+                            >
+                              {expandedDraft === index ? "收起" : "更多"}
+                            </button>
+                            <button type="button" onClick={() => removeDraftLesson(index)}>
+                              删除
+                            </button>
+                          </div>
+                          {expandedDraft === index && (
+                            <div className="manage-lesson-fields">
+                              <label>
+                                学习目标
+                                <input
+                                  value={lesson.goal}
+                                  onChange={(event) =>
+                                    updateDraftLesson(index, "goal", event.target.value)
+                                  }
+                                  placeholder="解决什么问题（选填）"
+                                />
+                              </label>
+                              <label>
+                                核心结构
+                                <input
+                                  value={lesson.template}
+                                  onChange={(event) =>
+                                    updateDraftLesson(index, "template", event.target.value)
+                                  }
+                                  placeholder="结论 + 原因 + 细节 + 感受（选填）"
+                                />
+                              </label>
+                              <label>
+                                题目
+                                <input
+                                  value={lesson.question}
+                                  onChange={(event) =>
+                                    updateDraftLesson(index, "question", event.target.value)
+                                  }
+                                  placeholder="今天要回答的问题（选填）"
+                                />
+                              </label>
+                              <label>
+                                示例
+                                <textarea
+                                  rows={6}
+                                  value={lesson.exampleText}
+                                  onChange={(event) =>
+                                    updateDraftLesson(index, "exampleText", event.target.value)
+                                  }
+                                  placeholder={"结论：示例内容\n原因：示例内容"}
+                                />
+                              </label>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="form-actions split">
+                  <button type="button" onClick={addDraftLesson}>
+                    ＋ 添加一节课
+                  </button>
+                  <div className="form-actions">
+                    <button type="button" className="primary" onClick={saveLesson}>
+                      保存课程
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAdding(false);
+                        setIsNewCourse(false);
+                      }}
                     >
-                      {categories
-                        .filter((category) => !builtInCategoryIds.has(category.id))
-                        .map((category) => (
-                          <option key={category.id} value={category.id}>
-                            {category.title}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                )}
-                <label>
-                  课程标题
-                  <input
-                    value={draft.title}
-                    onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-                    placeholder="Day 1 · 课程名称"
-                  />
-                </label>
-                <label>
-                  学习目标
-                  <input
-                    value={draft.goal}
-                    onChange={(event) => setDraft({ ...draft, goal: event.target.value })}
-                    placeholder="解决什么问题"
-                  />
-                </label>
-                <label>
-                  核心结构
-                  <input
-                    value={draft.template}
-                    onChange={(event) => setDraft({ ...draft, template: event.target.value })}
-                    placeholder="结论 + 原因 + 细节 + 感受"
-                  />
-                </label>
-                <label>
-                  题目
-                  <input
-                    value={draft.question}
-                    onChange={(event) => setDraft({ ...draft, question: event.target.value })}
-                    placeholder="今天要回答的问题"
-                  />
-                </label>
-                <label>
-                  示例（按结构分行填写）
-                  <textarea
-                    value={draft.exampleText}
-                    onChange={(event) => setDraft({ ...draft, exampleText: event.target.value })}
-                    placeholder={"结论：示例内容\n原因：示例内容\n细节：示例内容\n感受：示例内容"}
-                    rows={8}
-                  />
-                </label>
-                <div className="form-actions">
-                  <button type="button" className="primary" onClick={saveLesson}>
-                    保存课程
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAdding(false);
-                      setIsNewCourse(false);
-                    }}
-                  >
-                    取消
-                  </button>
+                      取消
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1759,18 +2206,8 @@ export default function Home() {
 }
 
 function HighlightedTranscript({ text }: { text: string }) {
-  const parts = text.split(new RegExp(`(${fillerWords.join("|")})`, "g"));
-  return (
-    <p>
-      {parts.map((part, index) =>
-        fillerWords.includes(part) ? (
-          <mark key={`${part}-${index}`}>{part}</mark>
-        ) : (
-          <span key={`${part}-${index}`}>{part}</span>
-        ),
-      )}
-    </p>
-  );
+  // 整段连续展示识别结果，不按口头词拆分句子，避免句子被切碎。
+  return <p>{text}</p>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

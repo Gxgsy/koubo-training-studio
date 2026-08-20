@@ -524,6 +524,11 @@ p {
   padding: 14px !important;
 }
 
+.script-field .paste-box.script-only {
+  min-height: 300px !important;
+  resize: vertical;
+}
+
 .paste-row button {
   border: 0;
   border-radius: 8px;
@@ -1224,6 +1229,82 @@ p {
   font-size: 12px;
 }
 
+.manage-course-name {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px dashed transparent;
+  padding: 4px 2px;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+}
+
+.manage-course-name:focus {
+  border-bottom-color: var(--blue);
+}
+
+.manage-lesson-title {
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px dashed transparent;
+  padding: 4px 2px;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.manage-lesson-title:focus {
+  border-bottom-color: var(--blue);
+}
+
+.manage-lesson-fields {
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  border-top: 1px dashed var(--line);
+  margin-top: 6px;
+  padding-top: 10px;
+}
+
+.manage-lesson-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.manage-lesson-fields input,
+.manage-lesson-fields textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+  color: var(--ink);
+  background: #fbfdff;
+  font: inherit;
+}
+
+.manage-lesson-fields textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.manage-lesson-fields input:focus,
+.manage-lesson-fields textarea:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 4px rgba(23, 105, 255, 0.1);
+}
+
+.form-actions .primary {
+  color: white;
+  background: var(--blue);
+}
+
 .add-form {
   display: grid;
   gap: 12px;
@@ -1292,6 +1373,11 @@ p {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.form-actions.split {
+  justify-content: space-between;
+  align-items: center;
 }
 
 .form-actions .primary {
@@ -1376,7 +1462,9 @@ body {
 .part-editor textarea,
 .add-form input,
 .add-form select,
-.add-form textarea {
+.add-form textarea,
+.manage-lesson-fields input,
+.manage-lesson-fields textarea {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(255, 255, 255, 0.14);
